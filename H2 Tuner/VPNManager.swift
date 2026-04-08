@@ -1,48 +1,86 @@
 import Foundation
 import SwiftUI
 
-// LibXray wrapper - calls gomobile ObjC class at runtime
-// gomobile generates class "LibxrayXray" with methods runXray/stopXray/initGCPercent
-// We use runtime dispatch to avoid compile-time dependency on exact class name
-private func libxrayRun(_ configBase64: String) -> String {
-    // Try known gomobile naming patterns
-    let classNames = ["LibxrayXray", "Libxray", "LibXrayXray", "LibXray"]
-    for name in classNames {
-        guard let cls = NSClassFromString(name) as? NSObject.Type else { continue }
-        let sel = NSSelectorFromString("runXray:")
-        if cls.responds(to: sel) {
-            let result = cls.perform(sel, with: configBase64)?.takeUnretainedValue() as? String
-            return result ?? ""
-        }
-        // Try instance method
-        let obj = cls.init()
-        if obj.responds(to: sel) {
-            let result = obj.perform(sel, with: configBase64)?.takeUnretainedValue() as? String
-            return result ?? ""
-        }
-    }
-    return "error: LibXray class not found"
-}
+// libXray API (gomobile, package "libxray"):
+// - gomobile Go func RunXray(base64Text string) string
+//   → ObjC: LibxrayRunXray(NSString*) → NSString*
+//   base64Text = base64(JSON{"datDir":"...","configPath":"..."})
+//   returns base64(JSON{"isSuccess":bool,"message":"..."})
+// - gomobile Go func StopXray() string
+//   → ObjC: LibxrayStopXray() → NSString*
 
-private func libxrayStop() {
-    let classNames = ["LibxrayXray", "Libxray", "LibXrayXray", "LibXray"]
-    for name in classNames {
-        guard let cls = NSClassFromString(name) as? NSObject.Type else { continue }
-        let sel = NSSelectorFromString("stopXray")
-        if cls.responds(to: sel) { cls.perform(sel); return }
-        let obj = cls.init()
-        if obj.responds(to: sel) { obj.perform(sel); return }
-    }
-}
+private enum LibXray {
+    // Write config JSON to temp file, call RunXray with base64-encoded request
+    static func run(configJSON: String) -> String {
+        let fm = FileManager.default
+        let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let configPath = docs.appendingPathComponent("xray_config.json").path
+        let datDir = docs.path
 
-private func libxrayGC() {
-    let classNames = ["LibxrayXray", "Libxray", "LibXrayXray", "LibXray"]
-    for name in classNames {
-        guard let cls = NSClassFromString(name) as? NSObject.Type else { continue }
-        let sel = NSSelectorFromString("initGCPercent:")
-        if cls.responds(to: sel) { cls.perform(sel, with: -1 as AnyObject); return }
-        let obj = cls.init()
-        if obj.responds(to: sel) { obj.perform(sel, with: -1 as AnyObject); return }
+        do {
+            try configJSON.write(toFile: configPath, atomically: true, encoding: .utf8)
+        } catch {
+            return "error: cannot write config: \(error)"
+        }
+
+        let request: [String: Any] = ["datDir": datDir, "configPath": configPath]
+        guard let requestData = try? JSONSerialization.data(withJSONObject: request),
+              let requestBase64 = String(data: requestData, encoding: .utf8)?.data(using: .utf8)?.base64EncodedString()
+        else { return "error: cannot encode request" }
+
+        // Try gomobile-generated function name
+        // gomobile: Go package "libxray" -> ObjC prefix "Libxray" -> func RunXray -> LibxrayRunXray
+        let resultBase64 = callLibxray(func: "LibxrayRunXray", arg: requestBase64)
+            ?? callLibxray(func: "RunXray", arg: requestBase64)
+            ?? "error: LibXray function not found"
+
+        // Decode result
+        if let data = Data(base64Encoded: resultBase64),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            let success = json["isSuccess"] as? Bool ?? false
+            let message = json["message"] as? String ?? ""
+            return success ? "" : "error: \(message)"
+        }
+        // If result is not base64 JSON, return raw
+        return resultBase64.hasPrefix("error") ? resultBase64 : ""
+    }
+
+    static func stop() {
+        _ = callLibxray(func: "LibxrayStopXray", arg: nil)
+            ?? callLibxray(func: "StopXray", arg: nil)
+    }
+
+    private static func callLibxray(func name: String, arg: String?) -> String? {
+        // Try as C function via dlsym
+        if let sym = dlsym(RTLD_DEFAULT, name) {
+            if let arg {
+                typealias RunFn = @convention(c) (UnsafePointer<CChar>?) -> UnsafePointer<CChar>?
+                let fn = unsafeBitCast(sym, to: RunFn.self)
+                if let result = fn(arg) { return String(cString: result) }
+                return ""
+            } else {
+                typealias StopFn = @convention(c) () -> UnsafePointer<CChar>?
+                let fn = unsafeBitCast(sym, to: StopFn.self)
+                _ = fn()
+                return ""
+            }
+        }
+        // Try ObjC runtime
+        let classNames = ["LibxrayXray", "Libxray", "LibXray", "LibXrayXray"]
+        for clsName in classNames {
+            guard let cls = NSClassFromString(clsName) as? NSObject.Type else { continue }
+            let sel = NSSelectorFromString(arg != nil ? "\(name):" : name)
+            let obj = cls.init()
+            guard obj.responds(to: sel) else { continue }
+            if let arg {
+                let r = obj.perform(sel, with: arg)?.takeUnretainedValue() as? String
+                return r ?? ""
+            } else {
+                obj.perform(sel)
+                return ""
+            }
+        }
+        return nil
     }
 }
 
@@ -58,7 +96,6 @@ class VPNManager: ObservableObject {
     @Published var bytesDown: Int64 = 0
 
     private var statsTimer: Timer?
-    private var gcTimer: Timer?
     private let localSocksPort: Int = 10809
     private var xrayRunning = false
     private let xrayQueue = DispatchQueue(label: "dev.selfcode.h2tuner.xray", qos: .userInitiated)
@@ -73,31 +110,20 @@ class VPNManager: ObservableObject {
         xrayQueue.async { [weak self] in
             guard let self else { return }
             do {
-                let config = try XrayConfigBuilder.build(server: server, settings: SettingsStore.shared)
-                guard let data = config.data(using: .utf8) else {
-                    self.handleError("Ошибка кодирования конфига"); return
+                let configJSON = try XrayConfigBuilder.build(server: server, settings: SettingsStore.shared)
+                let result = LibXray.run(configJSON: configJSON)
+                if !result.isEmpty {
+                    self.handleError(result); return
                 }
-
-                let resultBase64 = libxrayRun(data.base64EncodedString())
-                let resultStr: String
-                if let d = Data(base64Encoded: resultBase64), let s = String(data: d, encoding: .utf8) {
-                    resultStr = s
-                } else { resultStr = resultBase64 }
-
-                if !resultStr.isEmpty && resultStr.lowercased().contains("error") {
-                    self.handleError(resultStr); return
-                }
-
                 self.xrayRunning = true
-                self.addLog("xray запущен", level: .info)
-
+                self.addLog("Xray запущен", level: .info)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
                     guard let self, self.xrayRunning else { return }
                     withAnimation(.spring()) { self.connectionState = .connected }
                     self.connectedAt = Date()
                     self.startTimers()
                     self.fetchVPNIP()
-                    self.addLog("Успешно подключено", level: .info)
+                    self.addLog("Подключено", level: .info)
                 }
             } catch { self.handleError(error.localizedDescription) }
         }
@@ -107,7 +133,7 @@ class VPNManager: ObservableObject {
         DispatchQueue.main.async { withAnimation(.spring()) { self.connectionState = .disconnecting } }
         addLog("Отключение...", level: .info)
         stopTimers()
-        xrayQueue.async { [weak self] in libxrayStop(); self?.xrayRunning = false }
+        xrayQueue.async { [weak self] in LibXray.stop(); self?.xrayRunning = false }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             withAnimation(.spring()) {
                 self.connectionState = .disconnected
@@ -132,14 +158,12 @@ class VPNManager: ObservableObject {
     func fetchRealIP() {
         fetchIPInfo(useSocks: false) { [weak self] info in DispatchQueue.main.async { self?.realIP = info } }
     }
-
     private func fetchVPNIP() {
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
             guard let self, self.connectionState == .connected else { return }
             self.fetchIPInfo(useSocks: true) { [weak self] info in DispatchQueue.main.async { self?.vpnIP = info } }
         }
     }
-
     private func fetchIPInfo(useSocks: Bool, completion: @escaping (IPInfo?) -> Void) {
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 10
@@ -151,15 +175,13 @@ class VPNManager: ObservableObject {
     }
 
     private func startTimers() {
-        statsTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in self?.simulateStats() }
-        gcTimer    = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            guard let self, self.connectionState == .connected else { return }
-            libxrayGC()
+        statsTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            self.bytesUp += Int64.random(in: 800...8000)
+            self.bytesDown += Int64.random(in: 2000...30000)
         }
     }
-
-    private func stopTimers() { statsTimer?.invalidate(); statsTimer = nil; gcTimer?.invalidate(); gcTimer = nil }
-    private func simulateStats() { bytesUp += Int64.random(in: 800...8000); bytesDown += Int64.random(in: 2000...30000) }
+    private func stopTimers() { statsTimer?.invalidate(); statsTimer = nil }
 
     func addLog(_ message: String, level: LogLevel) {
         let entry = LogEntry(message: message, level: level, timestamp: Date())
@@ -171,7 +193,6 @@ class VPNManager: ObservableObject {
 struct LogEntry: Identifiable {
     let id = UUID(); let message: String; let level: LogLevel; let timestamp: Date
 }
-
 enum LogLevel {
     case info, warning, error, debug
     var color: Color {
@@ -182,7 +203,6 @@ enum LogLevel {
         switch self { case .info: return "INFO"; case .warning: return "WARN"; case .error: return "ERR "; case .debug: return "DBG " }
     }
 }
-
 extension Int64 {
     var formattedBytes: String {
         let kb = Double(self)/1024; let mb = kb/1024; let gb = mb/1024

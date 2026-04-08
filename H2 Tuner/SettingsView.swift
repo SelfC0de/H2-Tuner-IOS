@@ -7,8 +7,8 @@ struct SettingsView: View {
     @EnvironmentObject var vpnManager: VPNManager
     @Binding var toast: ToastMessage?
 
-    @State private var connectionExpanded = true
-    @State private var routingExpanded    = true
+    @State private var connectionExpanded = false
+    @State private var routingExpanded    = false
     @State private var logsExpanded       = false
     @State private var aboutExpanded      = false
     @State private var appeared           = false
