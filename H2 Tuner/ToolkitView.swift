@@ -240,7 +240,10 @@ struct ToolkitView: View {
                 Image(systemName: "building.columns").font(.system(size: 11, weight: .bold)).foregroundColor(Color(hex: "#8A9BB8"))
                 Text("ПРЯМОЙ ДОСТУП (БЕЗ VPN)").font(.system(size: 11, weight: .bold)).foregroundColor(Color(hex: "#8A9BB8")).kerning(0.8)
                 Spacer()
-                Toggle("", isOn: $settings.bypassRuServices).labelsHidden().tint(Color(hex: "#FC5C7D")).scaleEffect(0.8)
+                Toggle("", isOn: Binding(
+                    get: { settings.routingMode == .bypassRu },
+                    set: { val in settings.routingMode = val ? .bypassRu : .global }
+                )).labelsHidden().tint(Color(hex: "#FC5C7D")).scaleEffect(0.8)
             }
             .padding(.leading, 4)
 

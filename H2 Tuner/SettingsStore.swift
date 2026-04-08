@@ -91,10 +91,6 @@ let ruBypassDomains: [String] = [
     "vk.com", "ok.ru", "2gis.ru",
 ]
 
-let ruBypassCategories: [(emoji: String, title: String)] = [
-    ("🏛️", "Госуслуги"), ("🏦", "Банки РФ"), ("💳", "МИР/СБП"),
-    ("🛒", "Маркетплейсы"), ("📱", "VK / Mail"), ("🗺️", "2ГИС / Яндекс"),
-]
 
 // MARK: - SettingsStore
 
