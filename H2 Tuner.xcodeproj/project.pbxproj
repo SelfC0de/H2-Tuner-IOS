@@ -20,6 +20,7 @@
 		B011 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A011 /* SettingsView.swift */; };
 		B012 /* CustomTabBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = A012 /* CustomTabBar.swift */; };
 		B013 /* ToastAndBackground.swift in Sources */ = {isa = PBXBuildFile; fileRef = A013 /* ToastAndBackground.swift */; };
+		B016 /* ToolkitView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A016 /* ToolkitView.swift */; };
 		B014 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A014 /* Assets.xcassets */; };
 		B015 /* xray in Resources */ = {isa = PBXBuildFile; fileRef = A015 /* xray */; };
 /* End PBXBuildFile section */
@@ -40,6 +41,7 @@
 		A013 /* ToastAndBackground.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToastAndBackground.swift; sourceTree = "<group>"; };
 		A014 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A015 /* xray */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.executable"; path = xray; sourceTree = "<group>"; };
+		A016 /* ToolkitView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolkitView.swift; sourceTree = "<group>"; };
 		A099 /* H2 Tuner.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "H2 Tuner.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -70,6 +72,7 @@
 				A013,
 				A014,
 				A015,
+				A016,
 			);
 			path = "H2 Tuner";
 			sourceTree = "<group>";
@@ -134,7 +137,7 @@
 			files = (
 				B001, B002, B003, B004, B005,
 				B006, B007, B008, B009, B010,
-				B011, B012, B013,
+				B011, B012, B013, B016,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
