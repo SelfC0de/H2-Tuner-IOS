@@ -1,9 +1,8 @@
 #ifndef H2Tuner_Bridging_Header_h
 #define H2Tuner_Bridging_Header_h
 
-// LibXray gomobile framework
-// gomobile exports Go package "libxray" functions as C functions with prefix "Libxray"
-// e.g. func RunXray(configBase64 string) string -> LibxrayRunXray(NSString*) -> NSString*
-#import <Libxray/Libxray.objc.h>
+// gomobile generates framework named "Libxray" (lowercase x)
+// Header file is Headers/LibXray.objc.h (case sensitive on Linux, not on macOS)
+#import <Libxray/LibXray.objc.h>
 
 #endif

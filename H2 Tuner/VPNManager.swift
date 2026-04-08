@@ -1,10 +1,10 @@
 import Foundation
 import SwiftUI
 
-// LibXray gomobile API (gomobile prefixes with package name "libxray")
-// After gomobile build, Go package "libxray" exports as Libxray class in ObjC
-// Swift calls: LibxrayRunXray(), LibxrayStopXray(), LibxrayInitGCPercent()
-// All params/returns are base64-encoded strings
+// gomobile Go package "libxray" exports:
+// - Free functions become C functions: LibxrayRunXray(NSString) -> NSString
+// - But gomobile also wraps them in ObjC class LibxrayXrayInterface
+// We use the C-level free functions via bridging header
 
 class VPNManager: ObservableObject {
     static let shared = VPNManager()
@@ -40,8 +40,8 @@ class VPNManager: ObservableObject {
                 }
                 let configBase64 = configData.base64EncodedString()
 
-                // LibXray gomobile API: function name is LibxrayRunXray (package libxray, func RunXray)
-                // Returns base64-encoded JSON result string
+                // Call LibXray via ObjC bridge
+                // gomobile generates: LibxrayRunXray(NSString*) -> NSString*
                 let resultBase64 = LibxrayRunXray(configBase64) ?? ""
                 let resultStr: String
                 if let data = Data(base64Encoded: resultBase64),
@@ -51,13 +51,13 @@ class VPNManager: ObservableObject {
                     resultStr = resultBase64
                 }
 
-                if resultStr.lowercased().contains("error") && !resultStr.isEmpty {
+                if !resultStr.isEmpty && resultStr.lowercased().contains("error") {
                     self.handleError(resultStr)
                     return
                 }
 
                 self.xrayRunning = true
-                self.addLog("xray запущен через LibXray", level: .info)
+                self.addLog("xray запущен", level: .info)
 
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
                     guard let self, self.xrayRunning else { return }
@@ -127,9 +127,7 @@ class VPNManager: ObservableObject {
         config.timeoutIntervalForRequest = 10
         if useSocks {
             config.connectionProxyDictionary = [
-                "SOCKSEnable": 1,
-                "SOCKSProxy": "127.0.0.1",
-                "SOCKSPort": localSocksPort
+                "SOCKSEnable": 1, "SOCKSProxy": "127.0.0.1", "SOCKSPort": localSocksPort
             ]
         }
         let session = URLSession(configuration: config)
@@ -138,12 +136,8 @@ class VPNManager: ObservableObject {
             guard let data, let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                 completion(nil); return
             }
-            completion(IPInfo(
-                ip: json["ip"] as? String ?? "—",
-                country: json["country"] as? String,
-                city: json["city"] as? String,
-                org: json["org"] as? String
-            ))
+            completion(IPInfo(ip: json["ip"] as? String ?? "—", country: json["country"] as? String,
+                              city: json["city"] as? String, org: json["org"] as? String))
         }.resume()
     }
 
@@ -151,7 +145,6 @@ class VPNManager: ObservableObject {
         statsTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             self?.simulateStats()
         }
-        // iOS GC pressure relief (LibXray recommendation)
         gcTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             guard let self, self.connectionState == .connected else { return }
             LibxrayInitGCPercent(-1)
@@ -180,39 +173,28 @@ class VPNManager: ObservableObject {
 }
 
 struct LogEntry: Identifiable {
-    let id = UUID()
-    let message: String
-    let level: LogLevel
-    let timestamp: Date
+    let id = UUID(); let message: String; let level: LogLevel; let timestamp: Date
 }
 
 enum LogLevel {
     case info, warning, error, debug
-
     var color: Color {
         switch self {
-        case .info:    return Color(hex: "#8A9BB8")
-        case .warning: return Color(hex: "#FCA85C")
-        case .error:   return Color(hex: "#FC5C7D")
-        case .debug:   return Color(hex: "#5CF0FC")
+        case .info: return Color(hex: "#8A9BB8"); case .warning: return Color(hex: "#FCA85C")
+        case .error: return Color(hex: "#FC5C7D"); case .debug: return Color(hex: "#5CF0FC")
         }
     }
-
     var prefix: String {
         switch self {
-        case .info:    return "INFO"
-        case .warning: return "WARN"
-        case .error:   return "ERR "
-        case .debug:   return "DBG "
+        case .info: return "INFO"; case .warning: return "WARN"
+        case .error: return "ERR "; case .debug: return "DBG "
         }
     }
 }
 
 extension Int64 {
     var formattedBytes: String {
-        let kb = Double(self) / 1024
-        let mb = kb / 1024
-        let gb = mb / 1024
+        let kb = Double(self)/1024; let mb = kb/1024; let gb = mb/1024
         if gb >= 1 { return String(format: "%.2f GB", gb) }
         if mb >= 1 { return String(format: "%.2f MB", mb) }
         if kb >= 1 { return String(format: "%.0f KB", kb) }

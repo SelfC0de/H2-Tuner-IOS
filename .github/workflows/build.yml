@@ -24,25 +24,28 @@ jobs:
 
       - name: Build LibXray.xcframework
         run: |
-          # Install gomobile
           go install golang.org/x/mobile/cmd/gomobile@latest
           go install golang.org/x/mobile/cmd/gobind@latest
           export PATH=$PATH:$(go env GOPATH)/bin
           gomobile init
-
-          # Clone libXray + xray-core side by side
           mkdir xray_build && cd xray_build
           git clone --depth=1 https://github.com/XTLS/libXray.git
           git clone --depth=1 --branch v26.3.27 https://github.com/XTLS/Xray-core.git
-
           cd libXray
           python3 build/main.py apple gomobile
-
-          # Find result
           XCFW=$(find . -name "LibXray.xcframework" | head -1)
-          echo "Built: $XCFW"
+          echo "Built xcframework: $XCFW"
           cp -r "$XCFW" "../../H2 Tuner/LibXray.xcframework"
-          echo "LibXray.xcframework ready"
+          echo "=== Headers in xcframework ==="
+          find "../../H2 Tuner/LibXray.xcframework" -name "*.h" | head -5
+          echo "=== Exported symbols (RunXray/StopXray) ==="
+          find "../../H2 Tuner/LibXray.xcframework" -name "*.h" -exec grep -l "Xray\|xray\|Run\|Stop" {} \;
+
+      - name: Inspect LibXray headers
+        run: |
+          find "H2 Tuner/LibXray.xcframework" -name "*.h" | while read f; do
+            echo "=== $f ==="; head -40 "$f"
+          done
 
       - name: Patch pbxproj
         run: python3 patch_pbxproj.py
