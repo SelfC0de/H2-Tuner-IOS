@@ -1,9 +1,10 @@
 import Foundation
 import SwiftUI
 
-// Bridge to LibXray C API (loaded via xcframework)
-// LibXray exports: XrayRunLoop(configBase64) -> char*, XrayStop() -> void
-// We call them via @_silgen_name or via the bridging header
+// LibXray gomobile API (gomobile prefixes with package name "libxray")
+// After gomobile build, Go package "libxray" exports as Libxray class in ObjC
+// Swift calls: LibxrayRunXray(), LibxrayStopXray(), LibxrayInitGCPercent()
+// All params/returns are base64-encoded strings
 
 class VPNManager: ObservableObject {
     static let shared = VPNManager()
@@ -17,7 +18,7 @@ class VPNManager: ObservableObject {
     @Published var bytesDown: Int64 = 0
 
     private var statsTimer: Timer?
-    private var watchdogTimer: Timer?
+    private var gcTimer: Timer?
     private let localSocksPort: Int = 10809
     private var xrayRunning = false
     private let xrayQueue = DispatchQueue(label: "dev.selfcode.h2tuner.xray", qos: .userInitiated)
@@ -39,12 +40,18 @@ class VPNManager: ObservableObject {
                 }
                 let configBase64 = configData.base64EncodedString()
 
-                // Start xray via LibXray
-                let result = LibXrayRunLoop(configBase64)
-                let resultStr = result.map { String(cString: $0) } ?? ""
-                free(UnsafeMutableRawPointer(mutating: result))
+                // LibXray gomobile API: function name is LibxrayRunXray (package libxray, func RunXray)
+                // Returns base64-encoded JSON result string
+                let resultBase64 = LibxrayRunXray(configBase64) ?? ""
+                let resultStr: String
+                if let data = Data(base64Encoded: resultBase64),
+                   let decoded = String(data: data, encoding: .utf8) {
+                    resultStr = decoded
+                } else {
+                    resultStr = resultBase64
+                }
 
-                if resultStr.contains("error") || resultStr.contains("Error") {
+                if resultStr.lowercased().contains("error") && !resultStr.isEmpty {
                     self.handleError(resultStr)
                     return
                 }
@@ -72,7 +79,7 @@ class VPNManager: ObservableObject {
         addLog("Отключение...", level: .info)
         stopTimers()
         xrayQueue.async { [weak self] in
-            LibXrayStop()
+            LibxrayStopXray()
             self?.xrayRunning = false
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
@@ -144,16 +151,16 @@ class VPNManager: ObservableObject {
         statsTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             self?.simulateStats()
         }
-        // Periodic GC for iOS memory pressure (LibXray recommendation)
-        watchdogTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+        // iOS GC pressure relief (LibXray recommendation)
+        gcTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             guard let self, self.connectionState == .connected else { return }
-            LibXrayInitGCPercent(-1)
+            LibxrayInitGCPercent(-1)
         }
     }
 
     private func stopTimers() {
         statsTimer?.invalidate(); statsTimer = nil
-        watchdogTimer?.invalidate(); watchdogTimer = nil
+        gcTimer?.invalidate(); gcTimer = nil
     }
 
     private func simulateStats() {
