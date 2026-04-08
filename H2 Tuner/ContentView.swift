@@ -5,48 +5,55 @@ struct ContentView: View {
     @EnvironmentObject var vpnManager: VPNManager
     @State private var selectedTab: AppTab = .home
     @State private var toastMessage: ToastMessage? = nil
+    @State private var previousTab: AppTab = .home
+    @Namespace private var tabNamespace
 
     var body: some View {
         ZStack(alignment: .bottom) {
             AppBackground()
 
             ZStack {
-                HomeView(toast: $toastMessage)
-                    .opacity(selectedTab == .home ? 1 : 0)
-                    .allowsHitTesting(selectedTab == .home)
-
-                ServersView(toast: $toastMessage)
-                    .opacity(selectedTab == .servers ? 1 : 0)
-                    .allowsHitTesting(selectedTab == .servers)
-
-                LogsView()
-                    .opacity(selectedTab == .logs ? 1 : 0)
-                    .allowsHitTesting(selectedTab == .logs)
-
-                SettingsView(toast: $toastMessage)
-                    .opacity(selectedTab == .settings ? 1 : 0)
-                    .allowsHitTesting(selectedTab == .settings)
+                ForEach(AppTab.allCases, id: \.self) { tab in
+                    tabContent(tab)
+                        .opacity(selectedTab == tab ? 1 : 0)
+                        .allowsHitTesting(selectedTab == tab)
+                        .scaleEffect(selectedTab == tab ? 1 : 0.97)
+                        .animation(.spring(response: 0.38, dampingFraction: 0.82), value: selectedTab)
+                }
             }
             .padding(.bottom, 80)
 
             CustomTabBar(selectedTab: $selectedTab)
 
+            // Toast
             if let toast = toastMessage {
                 ToastView(message: toast)
-                    .transition(.move(edge: .top).combined(with: .opacity))
-                    .zIndex(100)
                     .frame(maxHeight: .infinity, alignment: .top)
                     .padding(.top, 60)
+                    .zIndex(100)
+                    .transition(.asymmetric(
+                        insertion: .push(from: .top).combined(with: .opacity),
+                        removal: .push(from: .top).combined(with: .opacity)
+                    ))
                     .onAppear {
                         DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-                            withAnimation(.spring()) {
-                                toastMessage = nil
-                            }
+                            withAnimation(.spring(response: 0.4)) { toastMessage = nil }
                         }
                     }
             }
         }
         .ignoresSafeArea()
-        .animation(.spring(response: 0.3), value: toastMessage?.id)
+        .animation(.spring(response: 0.35), value: toastMessage?.id)
+    }
+
+    @ViewBuilder
+    private func tabContent(_ tab: AppTab) -> some View {
+        switch tab {
+        case .home:    HomeView(toast: $toastMessage)
+        case .servers: ServersView(toast: $toastMessage)
+        case .toolkit: ToolkitView(toast: $toastMessage)
+        case .logs:    LogsView()
+        case .settings: SettingsView(toast: $toastMessage)
+        }
     }
 }

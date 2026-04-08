@@ -17,26 +17,88 @@ jobs:
           sudo xcode-select -s /Applications/$XCODE/Contents/Developer
           xcodebuild -version
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: '1.24'
-
-      - name: Build xray for iOS arm64
+      - name: Download LibXray.xcframework
         run: |
-          git clone --depth=1 --branch v26.3.27 https://github.com/XTLS/Xray-core.git xray-src
-          cd xray-src
-          SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
-          CC=$(xcrun --sdk iphoneos --find clang)
-          CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 \
-            CGO_CFLAGS="-isysroot $SDK_PATH -arch arm64 -miphoneos-version-min=17.0" \
-            CGO_LDFLAGS="-isysroot $SDK_PATH -arch arm64 -miphoneos-version-min=17.0" \
-            CC="$CC" \
-            go build -o ../xray_bin -trimpath -ldflags="-s -w" ./main
-          cd ..
-          cp xray_bin "H2 Tuner/xray"
-          chmod +x "H2 Tuner/xray"
-          file "H2 Tuner/xray"
+          # Get latest release with xcframework
+          RELEASE_URL=$(curl -s https://api.github.com/repos/XTLS/libXray/releases/latest \
+            | grep "browser_download_url" \
+            | grep "xcframework.zip" \
+            | grep "ios-arm64" \
+            | head -1 \
+            | cut -d '"' -f 4)
+
+          echo "Downloading: $RELEASE_URL"
+          curl -L "$RELEASE_URL" -o LibXray.xcframework.zip
+          unzip -q LibXray.xcframework.zip
+          ls -la
+          # Find and move xcframework
+          XCFW=$(find . -name "LibXray.xcframework" -maxdepth 3 | head -1)
+          echo "Found xcframework: $XCFW"
+          cp -r "$XCFW" "H2 Tuner/LibXray.xcframework"
+          echo "LibXray.xcframework installed"
+
+      - name: Add LibXray to pbxproj
+        run: |
+          python3 << 'PYEOF'
+          import re
+
+          with open("H2 Tuner.xcodeproj/project.pbxproj", "r") as f:
+              content = f.read()
+
+          # Add framework file reference
+          fw_ref = '\t\tFW001 /* LibXray.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = LibXray.xcframework; sourceTree = "<group>"; };\n'
+          fw_build = '\t\tFW002 /* LibXray.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = FW001 /* LibXray.xcframework */; };\n'
+
+          # Add to file references section
+          content = content.replace(
+              '/* End PBXFileReference section */',
+              fw_ref + '/* End PBXFileReference section */'
+          )
+
+          # Add build file
+          content = content.replace(
+              '/* End PBXBuildFile section */',
+              fw_build + '/* End PBXBuildFile section */'
+          )
+
+          # Add to sources group
+          content = content.replace(
+              'A015,\n\t\t\t);\n\t\t\tpath = "H2 Tuner";',
+              'A015,\n\t\t\t\tFW001,\n\t\t\t);\n\t\t\tpath = "H2 Tuner";'
+          )
+
+          # Add Frameworks build phase
+          fw_phase = '''
+\t\tPH_FRAMEWORKS = {
+\t\t\tisa = PBXFrameworksBuildPhase;
+\t\t\tbuildActionMask = 2147483647;
+\t\t\tfiles = (FW002);
+\t\t\trunOnlyForDeploymentPostprocessing = 0;
+\t\t};
+'''
+          content = content.replace(
+              '/* Begin PBXSourcesBuildPhase section */',
+              fw_phase + '/* Begin PBXSourcesBuildPhase section */'
+          )
+
+          # Add phase to target
+          content = content.replace(
+              'buildPhases = (\n\t\t\t\tPH_SOURCES,\n\t\t\t\tPH_RESOURCES,\n\t\t\t);',
+              'buildPhases = (\n\t\t\t\tPH_FRAMEWORKS,\n\t\t\t\tPH_SOURCES,\n\t\t\t\tPH_RESOURCES,\n\t\t\t);'
+          )
+
+          # Add bridging header and embed xcframework
+          bridge_setting = '\t\t\t\tSWIFT_OBJC_BRIDGING_HEADER = "H2 Tuner/H2Tuner-Bridging-Header.h";\n'
+          content = content.replace(
+              '\t\t\t\tSWIFT_VERSION = 5.0;\n\t\t\t};\n\t\t\tname = Release;',
+              '\t\t\t\tSWIFT_VERSION = 5.0;\n' + bridge_setting + '\t\t\t};\n\t\t\tname = Release;'
+          )
+
+          with open("H2 Tuner.xcodeproj/project.pbxproj", "w") as f:
+              f.write(content)
+
+          print("pbxproj updated with LibXray")
+          PYEOF
 
       - name: Build app (no signing)
         run: |
@@ -50,6 +112,7 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
             PRODUCT_BUNDLE_IDENTIFIER=dev.selfcode.h2tuner \
+            SWIFT_OBJC_BRIDGING_HEADER="H2 Tuner/H2Tuner-Bridging-Header.h" \
             -derivedDataPath build \
             build
 
@@ -70,8 +133,9 @@ jobs:
           body: |
             🚧 Pre-release build #${{ github.run_number }}
             
-            - Xray-core v26.3.27
-            - Протоколы: VLESS · VMess · Trojan · Shadowsocks · Hysteria2
+            - LibXray (XTLS официальная iOS библиотека)
+            - Xray-core последняя версия
+            - VLESS · VMess · Trojan · Shadowsocks · Hysteria2
             - Установка через Sideloadly
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

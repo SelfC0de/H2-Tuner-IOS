@@ -1,6 +1,10 @@
 import Foundation
 import SwiftUI
 
+// Bridge to LibXray C API (loaded via xcframework)
+// LibXray exports: XrayRunLoop(configBase64) -> char*, XrayStop() -> void
+// We call them via @_silgen_name or via the bridging header
+
 class VPNManager: ObservableObject {
     static let shared = VPNManager()
 
@@ -12,12 +16,11 @@ class VPNManager: ObservableObject {
     @Published var bytesUp: Int64 = 0
     @Published var bytesDown: Int64 = 0
 
-    private var xrayPID: pid_t = 0
     private var statsTimer: Timer?
     private var watchdogTimer: Timer?
     private let localSocksPort: Int = 10809
-    private var configFilePath: String?
-    private let logQueue = DispatchQueue(label: "dev.selfcode.h2tuner.logs", qos: .utility)
+    private var xrayRunning = false
+    private let xrayQueue = DispatchQueue(label: "dev.selfcode.h2tuner.xray", qos: .userInitiated)
 
     private init() { fetchRealIP() }
 
@@ -26,39 +29,36 @@ class VPNManager: ObservableObject {
         DispatchQueue.main.async { withAnimation(.spring()) { self.connectionState = .connecting } }
         addLog("Подключение к \(server.host):\(server.port) [\(server.protocol.displayName)]", level: .info)
 
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+        xrayQueue.async { [weak self] in
             guard let self else { return }
             do {
                 let config = try XrayConfigBuilder.build(server: server, settings: SettingsStore.shared)
-                let tmpURL = FileManager.default.temporaryDirectory
-                    .appendingPathComponent("xray_cfg_\(UUID().uuidString).json")
-                try config.write(to: tmpURL, atomically: true, encoding: .utf8)
-                self.configFilePath = tmpURL.path
+                guard let configData = config.data(using: .utf8) else {
+                    self.handleError("Ошибка кодирования конфига")
+                    return
+                }
+                let configBase64 = configData.base64EncodedString()
 
-                guard let xrayPath = self.resolveXrayPath() else {
-                    self.handleError("xray binary не найден в Bundle")
+                // Start xray via LibXray
+                let result = LibXrayRunLoop(configBase64)
+                let resultStr = result.map { String(cString: $0) } ?? ""
+                free(UnsafeMutableRawPointer(mutating: result))
+
+                if resultStr.contains("error") || resultStr.contains("Error") {
+                    self.handleError(resultStr)
                     return
                 }
 
-                let pid = self.launchXray(executablePath: xrayPath, configPath: tmpURL.path)
-                guard pid > 0 else {
-                    self.handleError("Не удалось запустить xray (posix_spawn failed)")
-                    return
-                }
-                self.xrayPID = pid
-                self.addLog("xray запущен (PID \(pid))", level: .info)
+                self.xrayRunning = true
+                self.addLog("xray запущен через LibXray", level: .info)
 
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-                    guard let self else { return }
-                    if self.xrayIsRunning() {
-                        withAnimation(.spring()) { self.connectionState = .connected }
-                        self.connectedAt = Date()
-                        self.startTimers()
-                        self.fetchVPNIP()
-                        self.addLog("Успешно подключено", level: .info)
-                    } else {
-                        self.handleError("xray завершился сразу после запуска")
-                    }
+                    guard let self, self.xrayRunning else { return }
+                    withAnimation(.spring()) { self.connectionState = .connected }
+                    self.connectedAt = Date()
+                    self.startTimers()
+                    self.fetchVPNIP()
+                    self.addLog("Успешно подключено", level: .info)
                 }
 
             } catch {
@@ -71,12 +71,11 @@ class VPNManager: ObservableObject {
         DispatchQueue.main.async { withAnimation(.spring()) { self.connectionState = .disconnecting } }
         addLog("Отключение...", level: .info)
         stopTimers()
-        killXray()
-        if let path = configFilePath {
-            try? FileManager.default.removeItem(atPath: path)
-            configFilePath = nil
+        xrayQueue.async { [weak self] in
+            LibXrayStop()
+            self?.xrayRunning = false
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             withAnimation(.spring()) {
                 self.connectionState = .disconnected
                 self.vpnIP = nil
@@ -88,59 +87,11 @@ class VPNManager: ObservableObject {
         }
     }
 
-    // MARK: - posix_spawn launcher
-
-    private func launchXray(executablePath: String, configPath: String) -> pid_t {
-        var pid: pid_t = 0
-        let args: [String] = [executablePath, "run", "-c", configPath]
-        let cArgs = args.map { $0.withCString(strdup) } + [nil]
-        defer { cArgs.compactMap { $0 }.forEach { free($0) } }
-
-        let env: [String] = ["PATH=/usr/bin:/bin"]
-        let cEnv = env.map { $0.withCString(strdup) } + [nil]
-        defer { cEnv.compactMap { $0 }.forEach { free($0) } }
-
-        var attr: posix_spawnattr_t?
-        posix_spawnattr_init(&attr)
-        posix_spawnattr_setflags(&attr, Int16(POSIX_SPAWN_SETPGROUP))
-
-        let result = posix_spawn(&pid, executablePath, nil, &attr,
-                                 cArgs.map { UnsafeMutablePointer(mutating: $0) },
-                                 cEnv.map { UnsafeMutablePointer(mutating: $0) })
-        posix_spawnattr_destroy(&attr)
-        return result == 0 ? pid : 0
-    }
-
-    private func killXray() {
-        guard xrayPID > 0 else { return }
-        kill(xrayPID, SIGTERM)
-        xrayPID = 0
-    }
-
-    private func xrayIsRunning() -> Bool {
-        guard xrayPID > 0 else { return false }
-        return kill(xrayPID, 0) == 0
-    }
-
-    // MARK: - Helpers
-
-    private func resolveXrayPath() -> String? {
-        let candidates = [
-            Bundle.main.path(forResource: "xray", ofType: nil),
-            Bundle.main.bundlePath + "/xray"
-        ]
-        for path in candidates.compactMap({ $0 }) where FileManager.default.fileExists(atPath: path) {
-            try? FileManager.default.setAttributes([.posixPermissions: NSNumber(value: 0o755)], ofItemAtPath: path)
-            return path
-        }
-        return nil
-    }
-
     private func handleError(_ msg: String) {
         DispatchQueue.main.async {
             withAnimation(.spring()) { self.connectionState = .error(msg) }
             self.addLog("Ошибка: \(msg)", level: .error)
-            self.killXray()
+            self.xrayRunning = false
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
                 if case .error = self.connectionState {
                     withAnimation { self.connectionState = .disconnected }
@@ -193,11 +144,10 @@ class VPNManager: ObservableObject {
         statsTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             self?.simulateStats()
         }
-        watchdogTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
+        // Periodic GC for iOS memory pressure (LibXray recommendation)
+        watchdogTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             guard let self, self.connectionState == .connected else { return }
-            if !self.xrayIsRunning() {
-                self.handleError("xray неожиданно завершился")
-            }
+            LibXrayInitGCPercent(-1)
         }
     }
 

@@ -4,14 +4,16 @@ import Foundation
 enum AppTab: String, CaseIterable {
     case home = "house.fill"
     case servers = "server.rack"
+    case toolkit = "wrench.and.screwdriver.fill"
     case logs = "doc.text.fill"
     case settings = "gearshape.fill"
 
     var label: String {
         switch self {
-        case .home: return "Главная"
+        case .home:    return "Главная"
         case .servers: return "Серверы"
-        case .logs: return "Логи"
+        case .toolkit: return "Инструменты"
+        case .logs:    return "Логи"
         case .settings: return "Настройки"
         }
     }

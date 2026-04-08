@@ -74,9 +74,10 @@ struct CustomTabBar: View {
 
     private func accentForTab(_ tab: AppTab) -> Color {
         switch tab {
-        case .home: return Color(hex: "#7C5CFC")
+        case .home:    return Color(hex: "#7C5CFC")
         case .servers: return Color(hex: "#5CF0FC")
-        case .logs: return Color(hex: "#FCA85C")
+        case .toolkit: return Color(hex: "#FC5C7D")
+        case .logs:    return Color(hex: "#FCA85C")
         case .settings: return Color(hex: "#5CFC8A")
         }
     }
