@@ -13,9 +13,7 @@ jobs:
 
       - name: Select Xcode
         run: |
-          ls /Applications/ | grep Xcode
           XCODE=$(ls /Applications/ | grep "^Xcode_" | sort -V | tail -1)
-          echo "Using: $XCODE"
           sudo xcode-select -s /Applications/$XCODE/Contents/Developer
           xcodebuild -version
 
@@ -24,26 +22,17 @@ jobs:
         with:
           go-version: '1.24'
 
-      - name: Build xray for iOS (via gomobile / darwin arm64)
+      - name: Build xray for iOS arm64
         run: |
           git clone --depth=1 --branch v26.3.27 https://github.com/XTLS/Xray-core.git xray-src
           cd xray-src
-
-          # Build as darwin/arm64 with CGO enabled using iOS SDK
           SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
           CC=$(xcrun --sdk iphoneos --find clang)
-
-          CGO_ENABLED=1 \
-          GOOS=darwin \
-          GOARCH=arm64 \
-          CGO_CFLAGS="-isysroot $SDK_PATH -arch arm64 -miphoneos-version-min=17.0" \
-          CGO_LDFLAGS="-isysroot $SDK_PATH -arch arm64 -miphoneos-version-min=17.0" \
-          CC="$CC" \
-          go build -o ../xray_bin \
-            -trimpath \
-            -ldflags="-s -w" \
-            ./main
-
+          CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 \
+            CGO_CFLAGS="-isysroot $SDK_PATH -arch arm64 -miphoneos-version-min=17.0" \
+            CGO_LDFLAGS="-isysroot $SDK_PATH -arch arm64 -miphoneos-version-min=17.0" \
+            CC="$CC" \
+            go build -o ../xray_bin -trimpath -ldflags="-s -w" ./main
           cd ..
           cp xray_bin "H2 Tuner/xray"
           chmod +x "H2 Tuner/xray"
@@ -71,9 +60,18 @@ jobs:
           cp -r "$APP" Payload/
           zip -r H2Tuner.ipa Payload/
 
-      - name: Upload IPA
-        uses: actions/upload-artifact@v4
+      - name: Create Pre-Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: H2Tuner-${{ github.run_number }}
-          path: H2Tuner.ipa
-          retention-days: 30
+          tag_name: pre-${{ github.run_number }}
+          name: "H2 Tuner pre-release #${{ github.run_number }}"
+          prerelease: true
+          files: H2Tuner.ipa
+          body: |
+            🚧 Pre-release build #${{ github.run_number }}
+            
+            - Xray-core v26.3.27
+            - Протоколы: VLESS · VMess · Trojan · Shadowsocks · Hysteria2
+            - Установка через Sideloadly
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
