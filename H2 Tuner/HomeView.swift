@@ -130,7 +130,7 @@ struct HomeView: View {
             glowAnimation = true
             if isAnimating { rotationAnimation = true }
         }
-        .onChange(of: vpnManager.connectionState) { _ in
+        .onChange(of: vpnManager.connectionState) { _, _ in
             rotationAnimation = false
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                 if isAnimating { rotationAnimation = true }

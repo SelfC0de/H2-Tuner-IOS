@@ -38,7 +38,7 @@ struct ServersView: View {
             AddServerSheet(toast: $toast)
         }
         .sheet(item: $editingServer) { server in
-            EditServerSheet(server: server, toast: $toast)
+            EditServerSheet(toast: $toast, server: server)
         }
     }
 

@@ -106,7 +106,7 @@ struct LogsView: View {
                 .padding(.top, 12)
                 .padding(.bottom, 40)
             }
-            .onChange(of: vpnManager.logs.count) { _ in
+            .onChange(of: vpnManager.logs.count) { _, _ in
                 if autoScroll, let first = filteredLogs.first {
                     withAnimation { proxy.scrollTo(first.id, anchor: .top) }
                 }

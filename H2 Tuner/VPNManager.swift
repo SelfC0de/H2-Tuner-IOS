@@ -12,9 +12,9 @@ class VPNManager: ObservableObject {
     @Published var bytesUp: Int64 = 0
     @Published var bytesDown: Int64 = 0
 
-    private var xrayProcess: Process?
+    private var xrayPID: pid_t = 0
     private var statsTimer: Timer?
-    private let localProxyPort: Int = 10808
+    private var watchdogTimer: Timer?
     private let localSocksPort: Int = 10809
     private var configFilePath: String?
     private let logQueue = DispatchQueue(label: "dev.selfcode.h2tuner.logs", qos: .utility)
@@ -36,62 +36,28 @@ class VPNManager: ObservableObject {
                 self.configFilePath = tmpURL.path
 
                 guard let xrayPath = self.resolveXrayPath() else {
-                    self.handleError("xray binary не найден — добавьте xray arm64 в проект")
+                    self.handleError("xray binary не найден в Bundle")
                     return
                 }
 
-                let process = Process()
-                process.executableURL = URL(fileURLWithPath: xrayPath)
-                process.arguments = ["run", "-c", tmpURL.path]
-
-                let pipe = Pipe()
-                process.standardOutput = pipe
-                process.standardError = pipe
-
-                process.terminationHandler = { [weak self] p in
-                    guard let self else { return }
-                    DispatchQueue.main.async {
-                        if self.connectionState == .connected || self.connectionState == .connecting {
-                            self.handleError("xray завершился (код \(p.terminationStatus))")
-                        }
-                    }
+                let pid = self.launchXray(executablePath: xrayPath, configPath: tmpURL.path)
+                guard pid > 0 else {
+                    self.handleError("Не удалось запустить xray (posix_spawn failed)")
+                    return
                 }
-
-                pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
-                    guard let self else { return }
-                    let data = handle.availableData
-                    guard !data.isEmpty, let str = String(data: data, encoding: .utf8) else { return }
-                    let lines = str.components(separatedBy: "\n").filter { !$0.isEmpty }
-                    self.logQueue.async {
-                        let entries = lines.map { line -> LogEntry in
-                            let low = line.lowercased()
-                            let level: LogLevel
-                            if low.contains("error") { level = .error }
-                            else if low.contains("warn") { level = .warning }
-                            else if low.contains("debug") { level = .debug }
-                            else { level = .info }
-                            return LogEntry(message: line, level: level, timestamp: Date())
-                        }
-                        DispatchQueue.main.async {
-                            self.logs.insert(contentsOf: entries, at: 0)
-                            if self.logs.count > 500 { self.logs = Array(self.logs.prefix(500)) }
-                        }
-                    }
-                }
-
-                try process.run()
-                self.xrayProcess = process
+                self.xrayPID = pid
+                self.addLog("xray запущен (PID \(pid))", level: .info)
 
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
                     guard let self else { return }
-                    if process.isRunning {
+                    if self.xrayIsRunning() {
                         withAnimation(.spring()) { self.connectionState = .connected }
                         self.connectedAt = Date()
-                        self.startStatsTimer()
+                        self.startTimers()
                         self.fetchVPNIP()
                         self.addLog("Успешно подключено", level: .info)
                     } else {
-                        self.handleError("Процесс xray завершился при старте")
+                        self.handleError("xray завершился сразу после запуска")
                     }
                 }
 
@@ -104,11 +70,8 @@ class VPNManager: ObservableObject {
     func disconnect() {
         DispatchQueue.main.async { withAnimation(.spring()) { self.connectionState = .disconnecting } }
         addLog("Отключение...", level: .info)
-        statsTimer?.invalidate()
-        statsTimer = nil
-        xrayProcess?.terminationHandler = nil
-        xrayProcess?.terminate()
-        xrayProcess = nil
+        stopTimers()
+        killXray()
         if let path = configFilePath {
             try? FileManager.default.removeItem(atPath: path)
             configFilePath = nil
@@ -125,10 +88,45 @@ class VPNManager: ObservableObject {
         }
     }
 
+    // MARK: - posix_spawn launcher
+
+    private func launchXray(executablePath: String, configPath: String) -> pid_t {
+        var pid: pid_t = 0
+        let args: [String] = [executablePath, "run", "-c", configPath]
+        let cArgs = args.map { $0.withCString(strdup) } + [nil]
+        defer { cArgs.compactMap { $0 }.forEach { free($0) } }
+
+        let env: [String] = ["PATH=/usr/bin:/bin"]
+        let cEnv = env.map { $0.withCString(strdup) } + [nil]
+        defer { cEnv.compactMap { $0 }.forEach { free($0) } }
+
+        var attr: posix_spawnattr_t?
+        posix_spawnattr_init(&attr)
+        posix_spawnattr_setflags(&attr, Int16(POSIX_SPAWN_SETPGROUP))
+
+        let result = posix_spawn(&pid, executablePath, nil, &attr,
+                                 cArgs.map { UnsafeMutablePointer(mutating: $0) },
+                                 cEnv.map { UnsafeMutablePointer(mutating: $0) })
+        posix_spawnattr_destroy(&attr)
+        return result == 0 ? pid : 0
+    }
+
+    private func killXray() {
+        guard xrayPID > 0 else { return }
+        kill(xrayPID, SIGTERM)
+        xrayPID = 0
+    }
+
+    private func xrayIsRunning() -> Bool {
+        guard xrayPID > 0 else { return false }
+        return kill(xrayPID, 0) == 0
+    }
+
+    // MARK: - Helpers
+
     private func resolveXrayPath() -> String? {
         let candidates = [
             Bundle.main.path(forResource: "xray", ofType: nil),
-            Bundle.main.path(forAuxiliaryExecutable: "xray"),
             Bundle.main.bundlePath + "/xray"
         ]
         for path in candidates.compactMap({ $0 }) where FileManager.default.fileExists(atPath: path) {
@@ -142,9 +140,7 @@ class VPNManager: ObservableObject {
         DispatchQueue.main.async {
             withAnimation(.spring()) { self.connectionState = .error(msg) }
             self.addLog("Ошибка: \(msg)", level: .error)
-            self.xrayProcess?.terminationHandler = nil
-            self.xrayProcess?.terminate()
-            self.xrayProcess = nil
+            self.killXray()
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
                 if case .error = self.connectionState {
                     withAnimation { self.connectionState = .disconnected }
@@ -193,11 +189,21 @@ class VPNManager: ObservableObject {
         }.resume()
     }
 
-    private func startStatsTimer() {
-        statsTimer?.invalidate()
+    private func startTimers() {
         statsTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             self?.simulateStats()
         }
+        watchdogTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
+            guard let self, self.connectionState == .connected else { return }
+            if !self.xrayIsRunning() {
+                self.handleError("xray неожиданно завершился")
+            }
+        }
+    }
+
+    private func stopTimers() {
+        statsTimer?.invalidate(); statsTimer = nil
+        watchdogTimer?.invalidate(); watchdogTimer = nil
     }
 
     private func simulateStats() {
