@@ -1,8 +1,6 @@
 name: Build H2 Tuner
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 jobs:
@@ -13,8 +11,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Select Xcode 16
-        run: sudo xcode-select -s /Applications/Xcode_16.0.app/Contents/Developer
+      - name: Select Xcode
+        run: |
+          ls /Applications/ | grep Xcode
+          XCODE=$(ls /Applications/ | grep "^Xcode_" | sort -V | tail -1)
+          echo "Using: $XCODE"
+          sudo xcode-select -s /Applications/$XCODE/Contents/Developer
+          xcodebuild -version
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -29,7 +32,7 @@ jobs:
           cd ..
           cp xray_bin "H2 Tuner/xray"
           chmod +x "H2 Tuner/xray"
-          echo "xray built: $(file H2\ Tuner/xray)"
+          file "H2 Tuner/xray"
 
       - name: Build app (no signing)
         run: |
