@@ -17,20 +17,32 @@ jobs:
           sudo xcode-select -s /Applications/$XCODE/Contents/Developer
           xcodebuild -version
 
-      - name: Download LibXray.xcframework
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Build LibXray.xcframework
         run: |
-          RELEASE_URL=$(curl -s https://api.github.com/repos/XTLS/libXray/releases/latest \
-            | grep "browser_download_url" \
-            | grep "xcframework.zip" \
-            | grep "ios-arm64" \
-            | head -1 \
-            | cut -d '"' -f 4)
-          echo "Downloading: $RELEASE_URL"
-          curl -L "$RELEASE_URL" -o LibXray.xcframework.zip
-          unzip -q LibXray.xcframework.zip
-          XCFW=$(find . -name "LibXray.xcframework" -maxdepth 3 | head -1)
-          echo "Found: $XCFW"
-          cp -r "$XCFW" "H2 Tuner/LibXray.xcframework"
+          # Install gomobile
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          go install golang.org/x/mobile/cmd/gobind@latest
+          export PATH=$PATH:$(go env GOPATH)/bin
+          gomobile init
+
+          # Clone libXray + xray-core side by side
+          mkdir xray_build && cd xray_build
+          git clone --depth=1 https://github.com/XTLS/libXray.git
+          git clone --depth=1 --branch v26.3.27 https://github.com/XTLS/Xray-core.git
+
+          cd libXray
+          python3 build/main.py apple gomobile
+
+          # Find result
+          XCFW=$(find . -name "LibXray.xcframework" | head -1)
+          echo "Built: $XCFW"
+          cp -r "$XCFW" "../../H2 Tuner/LibXray.xcframework"
+          echo "LibXray.xcframework ready"
 
       - name: Patch pbxproj
         run: python3 patch_pbxproj.py
