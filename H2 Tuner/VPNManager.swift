@@ -52,7 +52,8 @@ private enum LibXray {
 
     private static func callLibxray(func name: String, arg: String?) -> String? {
         // Try as C function via dlsym
-        if let sym = dlsym(RTLD_DEFAULT, name) {
+        let rtldDefault = UnsafeMutableRawPointer(bitPattern: -2)
+        if let sym = dlsym(rtldDefault, name) {
             if let arg {
                 typealias RunFn = @convention(c) (UnsafePointer<CChar>?) -> UnsafePointer<CChar>?
                 let fn = unsafeBitCast(sym, to: RunFn.self)
