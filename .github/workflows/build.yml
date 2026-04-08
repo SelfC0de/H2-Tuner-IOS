@@ -1,0 +1,89 @@
+name: Build H2 Tuner IPA
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g. 1.0.0)'
+        required: false
+        default: '1.0.0'
+
+jobs:
+  build:
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode 16
+        run: sudo xcode-select -s /Applications/Xcode_16.0.app/Contents/Developer
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Download xray-core arm64 binary
+        run: |
+          curl -L "https://github.com/XTLS/Xray-core/releases/download/v26.3.27/Xray-ios-arm64.zip" -o xray.zip
+          unzip xray.zip -d xray_extracted
+          cp xray_extracted/xray "H2 Tuner/xray" || cp xray_extracted/*/xray "H2 Tuner/xray" || find xray_extracted -name "xray" -exec cp {} "H2 Tuner/xray" \;
+          chmod +x "H2 Tuner/xray"
+          echo "xray binary ready"
+
+      - name: Build (no signing)
+        run: |
+          xcodebuild \
+            -project "H2 Tuner.xcodeproj" \
+            -scheme "H2 Tuner" \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination "generic/platform=iOS" \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            PRODUCT_BUNDLE_IDENTIFIER=dev.selfcode.h2tuner \
+            -derivedDataPath build \
+            build
+
+      - name: Package .app into zip
+        run: |
+          APP_PATH=$(find build -name "H2 Tuner.app" | head -1)
+          echo "Found app at: $APP_PATH"
+          mkdir -p Payload
+          cp -r "$APP_PATH" Payload/
+          zip -r "H2Tuner.ipa" Payload
+          echo "IPA created"
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: H2Tuner-${{ github.run_number }}
+          path: H2Tuner.ipa
+          retention-days: 30
+
+      - name: Upload .app zip (for Sideloadly)
+        run: |
+          APP_PATH=$(find build -name "H2 Tuner.app" | head -1)
+          zip -r "H2Tuner-app.zip" "$APP_PATH"
+
+      - name: Upload .app artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: H2Tuner-app-${{ github.run_number }}
+          path: H2Tuner-app.zip
+          retention-days: 30
+
+      - name: Create Release (on push to main)
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ github.event.inputs.version || '1.0.0' }}-build${{ github.run_number }}
+          name: H2 Tuner v${{ github.event.inputs.version || '1.0.0' }}
+          files: |
+            H2Tuner.ipa
+            H2Tuner-app.zip
+          generate_release_notes: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

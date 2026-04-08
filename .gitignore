@@ -1,0 +1,11 @@
+.DS_Store
+build/
+*.xcuserstate
+*.xcworkspace
+xcuserdata/
+DerivedData/
+*.ipa
+Payload/
+*.log
+xray_extracted/
+xray.zip
