@@ -250,6 +250,49 @@ struct SettingsView: View {
                 }
                 .padding(.horizontal, 14).padding(.vertical, 12)
             }
+            SDivider()
+            // Установка прокси профиля
+            Button {
+                ProxyProfileManager.installProfile { success in
+                    DispatchQueue.main.async {
+                        if success {
+                            withAnimation { toast = ToastMessage(text: "Профиль открыт — установи его в Настройках", style: .info) }
+                        } else {
+                            withAnimation { toast = ToastMessage(text: "Не удалось открыть. Открываю Настройки...", style: .warning) }
+                            ProxyProfileManager.openProfileSettings()
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 14) {
+                    SettingIcon(icon: "network.badge.shield.half.filled", color: Color(hex: "#5CFC8A"))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Установить прокси профиль")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundColor(Color(hex: "#5CFC8A"))
+                        Text("SOCKS5 · 127.0.0.1:10809")
+                            .font(.system(size: 11))
+                            .foregroundColor(Color(hex: "#666680"))
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right").font(.system(size: 12)).foregroundColor(Color(hex: "#444460"))
+                }
+                .padding(.horizontal, 14).padding(.vertical, 12)
+            }
+            SDivider()
+            Button {
+                ProxyProfileManager.openProfileSettings()
+            } label: {
+                HStack(spacing: 14) {
+                    SettingIcon(icon: "trash", color: Color(hex: "#FC5C7D"))
+                    Text("Удалить профиль")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(Color(hex: "#FC5C7D"))
+                    Spacer()
+                    Image(systemName: "chevron.right").font(.system(size: 12)).foregroundColor(Color(hex: "#444460"))
+                }
+                .padding(.horizontal, 14).padding(.vertical, 12)
+            }
         }
     }
 

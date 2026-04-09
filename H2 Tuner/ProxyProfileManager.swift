@@ -6,7 +6,6 @@ struct ProxyProfileManager {
     static let profileID = "dev.selfcode.h2tuner.proxy"
     static let socksPort = 10809
 
-    // Генерирует .mobileconfig XML для SOCKS5 прокси
     static func generateMobileconfig() -> Data {
         let xml = """
 <?xml version="1.0" encoding="UTF-8"?>
@@ -66,37 +65,55 @@ struct ProxyProfileManager {
         return xml.data(using: .utf8) ?? Data()
     }
 
-    // Устанавливает профиль — сохраняет файл во временную директорию и открывает через UIApplication
+    // UIDocumentInteractionController — правильный способ открыть .mobileconfig на iOS
+    static var documentController: UIDocumentInteractionController?
+
     static func installProfile(completion: @escaping (Bool) -> Void) {
         let data = generateMobileconfig()
         let tmpURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("H2Tuner-proxy.mobileconfig")
 
         do {
-            try data.write(to: tmpURL)
-            DispatchQueue.main.async {
-                // Открываем .mobileconfig — iOS покажет системный диалог установки
-                UIApplication.shared.open(tmpURL) { success in
-                    completion(success)
-                }
-            }
+            try data.write(to: tmpURL, options: .atomic)
         } catch {
             completion(false)
+            return
+        }
+
+        DispatchQueue.main.async {
+            guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+                  let window = scene.windows.first,
+                  let rootVC = window.rootViewController else {
+                completion(false)
+                return
+            }
+
+            let dc = UIDocumentInteractionController(url: tmpURL)
+            dc.uti = "com.apple.mobileconfig"
+            documentController = dc
+
+            // presentOptionsMenu показывает системный диалог установки профиля
+            let presented = dc.presentOptionsMenu(
+                from: rootVC.view.bounds,
+                in: rootVC.view,
+                animated: true
+            )
+            completion(presented)
         }
     }
 
-    // Удалить профиль нельзя программно без MDM.
-    // Открываем Настройки → профили чтобы пользователь удалил вручную.
+    // Открыть Настройки → профили для удаления
     static func openProfileSettings() {
-        if let url = URL(string: "App-Prefs:root=General&path=ManagedConfigurationList") {
-            if UIApplication.shared.canOpenURL(url) {
+        let urls = [
+            "App-Prefs:root=General&path=ManagedConfigurationList",
+            "App-Prefs:root=General",
+            UIApplication.openSettingsURLString
+        ]
+        for urlStr in urls {
+            if let url = URL(string: urlStr), UIApplication.shared.canOpenURL(url) {
                 UIApplication.shared.open(url)
                 return
             }
-        }
-        // Fallback — просто открыть Настройки
-        if let url = URL(string: UIApplication.openSettingsURLString) {
-            UIApplication.shared.open(url)
         }
     }
 }
