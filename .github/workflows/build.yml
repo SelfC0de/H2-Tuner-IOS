@@ -35,13 +35,25 @@ jobs:
           python3 build/main.py apple gomobile
           XCFW=$(find . -name "LibXray.xcframework" | head -1)
           cp -r "$XCFW" "../../H2 Tuner/LibXray.xcframework"
-          echo "=== ALL HEADERS ==="
-          find "../../H2 Tuner/LibXray.xcframework" -name "*.h" | while read f; do
-            echo "--- $f ---"; cat "$f"
+
+      - name: Dump LibXray symbols
+        run: |
+          echo "=== ALL FILES ==="
+          find "H2 Tuner/LibXray.xcframework" -type f
+          echo ""
+          echo "=== HEADERS ==="
+          find "H2 Tuner/LibXray.xcframework" -name "*.h" -exec echo "--- {} ---" \; -exec cat {} \;
+          echo ""
+          echo "=== NM SYMBOLS ==="
+          find "H2 Tuner/LibXray.xcframework" -type f | while read f; do
+            OUT=$(nm "$f" 2>/dev/null | grep -iE "RunXray|StopXray|InitGC|OBJC_CLASS" || true)
+            if [ -n "$OUT" ]; then echo "--- $f ---"; echo "$OUT"; fi
           done
-          echo "=== ObjC CLASS NAMES (nm dump) ==="
-          find "../../H2 Tuner/LibXray.xcframework" -name "*.a" -o -name "LibXray" | while read f; do
-            nm "$f" 2>/dev/null | grep "_OBJC_CLASS_\$" || true
+          echo ""
+          echo "=== STRINGS EXACT ==="
+          find "H2 Tuner/LibXray.xcframework" -type f | while read f; do
+            OUT=$(strings "$f" 2>/dev/null | grep -E "^(Libxray|LibXray|libxray)" | sort -u || true)
+            if [ -n "$OUT" ]; then echo "--- $f ---"; echo "$OUT"; fi
           done
 
       - name: Patch pbxproj
