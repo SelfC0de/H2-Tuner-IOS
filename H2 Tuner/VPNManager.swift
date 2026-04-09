@@ -1,87 +1,41 @@
 import Foundation
 import SwiftUI
 
-// libXray API (gomobile, package "libxray"):
-// - gomobile Go func RunXray(base64Text string) string
-//   → ObjC: LibxrayRunXray(NSString*) → NSString*
-//   base64Text = base64(JSON{"datDir":"...","configPath":"..."})
-//   returns base64(JSON{"isSuccess":bool,"message":"..."})
-// - gomobile Go func StopXray() string
-//   → ObjC: LibxrayStopXray() → NSString*
+// LibXray API — confirmed from nm dump:
+// LibXrayRunXrayFromJSON(base64Text) → NSString*
+//   base64Text = base64(JSON{"datDir":"...","mphCachePath":"...","configJSON":"..."})
+// LibXrayStopXray() → NSString*
+// Returns base64(JSON{"isSuccess":bool,"message":"..."})
 
 private enum LibXray {
-    // Write config JSON to temp file, call RunXray with base64-encoded request
-    static func run(configJSON: String) -> String {
-        let fm = FileManager.default
-        let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let configPath = docs.appendingPathComponent("xray_config.json").path
-        let datDir = docs.path
+    static func runFromJSON(configJSON: String) -> String {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].path
+        let request: [String: Any] = [
+            "datDir": docs,
+            "mphCachePath": "",
+            "configJSON": configJSON
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: request),
+              let base64 = String(data: data, encoding: .utf8)?.data(using: .utf8)?.base64EncodedString()
+        else { return "error: encode failed" }
 
-        do {
-            try configJSON.write(toFile: configPath, atomically: true, encoding: .utf8)
-        } catch {
-            return "error: cannot write config: \(error)"
-        }
-
-        let request: [String: Any] = ["datDir": datDir, "configPath": configPath]
-        guard let requestData = try? JSONSerialization.data(withJSONObject: request),
-              let requestBase64 = String(data: requestData, encoding: .utf8)?.data(using: .utf8)?.base64EncodedString()
-        else { return "error: cannot encode request" }
-
-        // Try gomobile-generated function name
-        // gomobile: Go package "libxray" -> ObjC prefix "Libxray" -> func RunXray -> LibxrayRunXray
-        let resultBase64 = callLibxray(func: "LibxrayRunXray", arg: requestBase64)
-            ?? callLibxray(func: "RunXray", arg: requestBase64)
-            ?? "error: LibXray function not found"
-
-        // Decode result
-        if let data = Data(base64Encoded: resultBase64),
-           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            let success = json["isSuccess"] as? Bool ?? false
-            let message = json["message"] as? String ?? ""
-            return success ? "" : "error: \(message)"
-        }
-        // If result is not base64 JSON, return raw
-        return resultBase64.hasPrefix("error") ? resultBase64 : ""
+        let raw = LibXrayRunXrayFromJSON(base64)
+        return decodeResult(raw)
     }
 
     static func stop() {
-        _ = callLibxray(func: "LibxrayStopXray", arg: nil)
-            ?? callLibxray(func: "StopXray", arg: nil)
+        _ = LibXrayStopXray()
     }
 
-    private static func callLibxray(func name: String, arg: String?) -> String? {
-        // Try as C function via dlsym
-        let rtldDefault = UnsafeMutableRawPointer(bitPattern: -2)
-        if let sym = dlsym(rtldDefault, name) {
-            if let arg {
-                typealias RunFn = @convention(c) (UnsafePointer<CChar>?) -> UnsafePointer<CChar>?
-                let fn = unsafeBitCast(sym, to: RunFn.self)
-                if let result = fn(arg) { return String(cString: result) }
-                return ""
-            } else {
-                typealias StopFn = @convention(c) () -> UnsafePointer<CChar>?
-                let fn = unsafeBitCast(sym, to: StopFn.self)
-                _ = fn()
-                return ""
-            }
+    private static func decodeResult(_ raw: String?) -> String {
+        guard let raw, !raw.isEmpty else { return "" }
+        if let data = Data(base64Encoded: raw),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            let ok = json["isSuccess"] as? Bool ?? false
+            let msg = json["message"] as? String ?? ""
+            return ok ? "" : "error: \(msg)"
         }
-        // Try ObjC runtime
-        let classNames = ["LibxrayXray", "Libxray", "LibXray", "LibXrayXray"]
-        for clsName in classNames {
-            guard let cls = NSClassFromString(clsName) as? NSObject.Type else { continue }
-            let sel = NSSelectorFromString(arg != nil ? "\(name):" : name)
-            let obj = cls.init()
-            guard obj.responds(to: sel) else { continue }
-            if let arg {
-                let r = obj.perform(sel, with: arg)?.takeUnretainedValue() as? String
-                return r ?? ""
-            } else {
-                obj.perform(sel)
-                return ""
-            }
-        }
-        return nil
+        return raw.hasPrefix("error") ? raw : ""
     }
 }
 
@@ -112,7 +66,7 @@ class VPNManager: ObservableObject {
             guard let self else { return }
             do {
                 let configJSON = try XrayConfigBuilder.build(server: server, settings: SettingsStore.shared)
-                let result = LibXray.run(configJSON: configJSON)
+                let result = LibXray.runFromJSON(configJSON: configJSON)
                 if !result.isEmpty {
                     self.handleError(result); return
                 }
