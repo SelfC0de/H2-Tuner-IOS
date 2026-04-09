@@ -8,9 +8,20 @@ import SwiftUI
 // LibXrayStopXray() -> NSString*
 
 private enum LibXray {
-    static func runFromJSON(configJSON: String) -> String {
+    static func runFromJSON(configJSON: String, host: String) -> String {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].path
-        // mphCachePath is optional — omit it to avoid issues with some libXray versions
+
+        // InitDns — resolves "first connection" issue when server address is a domain
+        // Only if host is a domain (not IP)
+        let isIP = host.range(of: #"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$"#, options: .regularExpression) != nil
+        if !host.isEmpty && !isIP {
+            if let req = try? JSONSerialization.data(withJSONObject: ["dns": "https://1.1.1.1/dns-query", "deviceName": host]),
+               let reqStr = String(data: req, encoding: .utf8),
+               let b64 = reqStr.data(using: .utf8)?.base64EncodedString() {
+                _ = LibXrayInitDns(b64)
+            }
+        }
+
         let request: [String: Any] = [
             "datDir": docs,
             "configJSON": configJSON
@@ -21,7 +32,6 @@ private enum LibXray {
         else { return "encode request failed" }
 
         let raw = LibXrayRunXrayFromJSON(base64)
-        // raw is base64(JSON{"isSuccess":bool,"message":"..."})
         return decodeResult(raw)
     }
 
@@ -121,7 +131,7 @@ class VPNManager: ObservableObject {
                 let configJSON = try XrayConfigBuilder.build(server: server, settings: SettingsStore.shared)
                 self.addLog("Config JSON length: \(configJSON.count)", level: .debug)
 
-                let result = LibXray.runFromJSON(configJSON: configJSON)
+                let result = LibXray.runFromJSON(configJSON: configJSON, host: server.host)
                 self.addLog("LibXray result: '\(result.isEmpty ? "OK (empty)" : result)'", level: result.isEmpty ? .info : .error)
 
                 if !result.isEmpty {
@@ -187,7 +197,14 @@ class VPNManager: ObservableObject {
     private func fetchIPInfo(useSocks: Bool, completion: @escaping (IPInfo?) -> Void) {
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 10
-        if useSocks { config.connectionProxyDictionary = ["SOCKSEnable": 1, "SOCKSProxy": "127.0.0.1", "SOCKSPort": localSocksPort] }
+        if useSocks {
+            // kCFStreamPropertySOCKSProxy keys — correct for iOS
+            config.connectionProxyDictionary = [
+                kCFStreamPropertySOCKSProxyHost as String: "127.0.0.1",
+                kCFStreamPropertySOCKSProxyPort as String: localSocksPort,
+                kCFStreamPropertySOCKSVersion as String: kCFStreamSocketSOCKSVersion5
+            ]
+        }
         URLSession(configuration: config).dataTask(with: URL(string: "https://ipinfo.io/json")!) { data, _, _ in
             guard let data, let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { completion(nil); return }
             completion(IPInfo(ip: json["ip"] as? String ?? "—", country: json["country"] as? String, city: json["city"] as? String, org: json["org"] as? String))
@@ -199,6 +216,8 @@ class VPNManager: ObservableObject {
             guard let self else { return }
             self.bytesUp += Int64.random(in: 800...8000)
             self.bytesDown += Int64.random(in: 2000...30000)
+            // iOS GC relief — recommended by libXray for iOS memory management
+            _ = LibXrayInitGCPercent(-1)
         }
     }
     private func stopTimers() { statsTimer?.invalidate(); statsTimer = nil }
