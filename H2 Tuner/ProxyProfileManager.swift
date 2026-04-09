@@ -1,5 +1,6 @@
 import Foundation
 import UIKit
+import SafariServices
 
 struct ProxyProfileManager {
 
@@ -73,16 +74,20 @@ struct ProxyProfileManager {
 
     static func installProfile(completion: @escaping (Bool) -> Void) {
         startLocalServer()
-        // Даём серверу 0.3с стартануть
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            let urlStr = "http://127.0.0.1:\(serverPort)/profile.mobileconfig"
-            if let url = URL(string: urlStr) {
-                UIApplication.shared.open(url, options: [:]) { success in
-                    completion(success)
-                }
-            } else {
-                completion(false)
+            // Safari блокирует http:// localhost в iOS 18 — открываем через SFSafariViewController
+            // который работает с локальными HTTP адресами
+            guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+                  let window = scene.windows.first,
+                  let rootVC = window.rootViewController else {
+                completion(false); return
             }
+            let urlStr = "http://127.0.0.1:\(serverPort)/profile.mobileconfig"
+            guard let url = URL(string: urlStr) else { completion(false); return }
+            let safari = SFSafariViewController(url: url)
+            safari.modalPresentationStyle = .pageSheet
+            rootVC.present(safari, animated: true)
+            completion(true)
         }
     }
 
