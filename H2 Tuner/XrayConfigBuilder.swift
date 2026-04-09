@@ -69,9 +69,22 @@ struct XrayConfigBuilder {
     }
 
     private static func lanRules() -> [[String: Any]] {
+        // Use explicit IP ranges instead of geoip:private — no geoip.dat required
         [
-            ["type": "field", "ip": ["geoip:private"], "outboundTag": "direct"],
-            ["type": "field", "domain": ["geosite:private"], "outboundTag": "direct"]
+            [
+                "type": "field",
+                "ip": [
+                    "10.0.0.0/8",
+                    "172.16.0.0/12",
+                    "192.168.0.0/16",
+                    "100.64.0.0/10",
+                    "127.0.0.0/8",
+                    "::1/128",
+                    "fc00::/7",
+                    "fe80::/10"
+                ],
+                "outboundTag": "direct"
+            ]
         ]
     }
 

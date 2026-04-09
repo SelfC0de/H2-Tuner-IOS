@@ -146,6 +146,10 @@ class VPNManager: ObservableObject {
                     self.startTimers()
                     self.fetchVPNIP()
                     self.addLog("Подключено", level: .info)
+                    // Установить прокси профиль
+                    ProxyProfileManager.installProfile { success in
+                        self.addLog(success ? "Профиль прокси установлен" : "Открой Настройки → Wi-Fi → прокси → 127.0.0.1:10809", level: success ? .info : .warning)
+                    }
                 }
             } catch {
                 self.addLog("XrayConfigBuilder error: \(error)", level: .error)
@@ -171,6 +175,7 @@ class VPNManager: ObservableObject {
                     self.bytesUp = 0; self.bytesDown = 0
                 }
                 self.addLog("Отключено", level: .info)
+                self.addLog("Удали профиль прокси: Настройки → Основные → VPN и управление устройством", level: .warning)
             }
         }
     }

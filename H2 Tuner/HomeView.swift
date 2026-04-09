@@ -228,7 +228,11 @@ struct HomeView: View {
     // MARK: - Server / Input
 
     private var serverOrInputSection: some View {
-        Group {
+        VStack(spacing: 8) {
+            // Поле ввода — всегда видно
+            linkInputSection
+
+            // Карточка выбранного сервера — если есть
             if let server = settings.selectedServer {
                 HStack(spacing: 10) {
                     ZStack {
@@ -257,10 +261,10 @@ struct HomeView: View {
                         .overlay(RoundedRectangle(cornerRadius: 12)
                             .stroke(server.protocol.accentColor.opacity(0.25), lineWidth: 1))
                 )
-            } else {
-                linkInputSection
+                .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
+        .animation(.spring(response: 0.35), value: settings.selectedServer?.id)
     }
 
     // MARK: - Link Input

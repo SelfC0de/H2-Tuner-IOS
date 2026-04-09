@@ -30,7 +30,7 @@ jobs:
           gomobile init
           mkdir xray_build && cd xray_build
           git clone --depth=1 https://github.com/XTLS/libXray.git
-          git clone --depth=1 --branch v26.3.27 https://github.com/XTLS/Xray-core.git
+          git clone --depth=1 https://github.com/XTLS/Xray-core.git
           cd libXray
           python3 build/main.py apple gomobile
           XCFW=$(find . -name "LibXray.xcframework" | head -1)
