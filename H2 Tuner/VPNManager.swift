@@ -31,7 +31,7 @@ private enum LibXray {
         if !result.isEmpty,
            let data = Data(base64Encoded: result),
            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            let ok = json["isSuccess"] as? Bool ?? false
+            let ok = (json["isSuccess"] as? Bool) ?? (json["success"] as? Bool) ?? false
             let msg = json["message"] as? String ?? ""
             if !ok { print("[LibXray] StopXray failed: \(msg)") }
         }
@@ -43,7 +43,7 @@ private enum LibXray {
 
         if let data = Data(base64Encoded: raw),
            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            let ok = json["isSuccess"] as? Bool ?? false
+            let ok = (json["isSuccess"] as? Bool) ?? (json["success"] as? Bool) ?? false
             let msg = json["message"] as? String ?? ""
             if ok { return "" }
             // Return full message — if empty, return the entire JSON for debug
