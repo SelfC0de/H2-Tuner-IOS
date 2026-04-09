@@ -28,9 +28,8 @@ private enum LibXray {
     static func stop() {
         // Call StopXray and wait — LibXray is synchronous on stop
         let result = LibXrayStopXray()
-        // Decode result for logging (optional)
-        if let raw = result, !raw.isEmpty,
-           let data = Data(base64Encoded: raw),
+        if !result.isEmpty,
+           let data = Data(base64Encoded: result),
            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             let ok = json["isSuccess"] as? Bool ?? false
             let msg = json["message"] as? String ?? ""
