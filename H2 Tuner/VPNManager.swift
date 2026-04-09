@@ -10,9 +10,9 @@ import SwiftUI
 private enum LibXray {
     static func runFromJSON(configJSON: String) -> String {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].path
+        // mphCachePath is optional — omit it to avoid issues with some libXray versions
         let request: [String: Any] = [
             "datDir": docs,
-            "mphCachePath": "",
             "configJSON": configJSON
         ]
         guard let reqData = try? JSONSerialization.data(withJSONObject: request),
@@ -21,30 +21,44 @@ private enum LibXray {
         else { return "encode request failed" }
 
         let raw = LibXrayRunXrayFromJSON(base64)
+        // raw is base64(JSON{"isSuccess":bool,"message":"..."})
         return decodeResult(raw)
     }
 
-    static func stop() { _ = LibXrayStopXray() }
+    static func stop() {
+        // Call StopXray and wait — LibXray is synchronous on stop
+        let result = LibXrayStopXray()
+        // Decode result for logging (optional)
+        if let raw = result, !raw.isEmpty,
+           let data = Data(base64Encoded: raw),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            let ok = json["isSuccess"] as? Bool ?? false
+            let msg = json["message"] as? String ?? ""
+            if !ok { print("[LibXray] StopXray failed: \(msg)") }
+        }
+    }
 
     static func decodeResult(_ raw: String?) -> String {
         guard let raw = raw else { return "LibXray returned nil" }
         guard !raw.isEmpty else { return "LibXray returned empty string" }
 
-        // Try base64 decode
-        if let data = Data(base64Encoded: raw) {
-            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                let ok = json["isSuccess"] as? Bool ?? false
-                let msg = json["message"] as? String ?? "(no message)"
-                if ok { return "" }
-                return "LibXray: \(msg)"
-            }
-            // base64 decoded but not JSON
-            let decoded = String(data: data, encoding: .utf8) ?? "(binary)"
-            return "LibXray non-JSON: \(decoded.prefix(200))"
+        if let data = Data(base64Encoded: raw),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            let ok = json["isSuccess"] as? Bool ?? false
+            let msg = json["message"] as? String ?? ""
+            if ok { return "" }
+            // Return full message — if empty, return the entire JSON for debug
+            if !msg.isEmpty { return msg }
+            let fullJson = String(data: (try? JSONSerialization.data(withJSONObject: json, options: [])) ?? data, encoding: .utf8) ?? "(json)"
+            return "isSuccess=false json=\(fullJson.prefix(300))"
         }
 
-        // Not base64 — return raw (truncated)
-        return "LibXray raw: \(raw.prefix(200))"
+        // Not valid base64+json — return raw
+        if let data = Data(base64Encoded: raw),
+           let str = String(data: data, encoding: .utf8) {
+            return "decoded: \(str.prefix(300))"
+        }
+        return "raw: \(raw.prefix(300))"
     }
 }
 
@@ -64,7 +78,31 @@ class VPNManager: ObservableObject {
     private var xrayRunning = false
     private let xrayQueue = DispatchQueue(label: "dev.selfcode.h2tuner.xray", qos: .userInitiated)
 
-    private init() { fetchRealIP() }
+    private init() {
+        fetchRealIP()
+        // Stop xray on app termination
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.willTerminateNotification,
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.forceStop()
+        }
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification,
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            // Keep running in background but ensure clean state
+            guard let self, !self.xrayRunning else { return }
+        }
+    }
+
+    // Force stop — called on app terminate, ensures no zombie process
+    func forceStop() {
+        guard xrayRunning else { return }
+        xrayRunning = false
+        stopTimers()
+        LibXray.stop()
+    }
 
     func connect(server: ServerConfig) {
         guard connectionState == .disconnected else { return }
@@ -73,6 +111,13 @@ class VPNManager: ObservableObject {
 
         xrayQueue.async { [weak self] in
             guard let self else { return }
+            // Kill any existing xray instance before starting new one
+            if self.xrayRunning {
+                self.addLog("Остановка предыдущего экземпляра...", level: .info)
+                LibXray.stop()
+                self.xrayRunning = false
+                Thread.sleep(forTimeInterval: 0.3)
+            }
             do {
                 let configJSON = try XrayConfigBuilder.build(server: server, settings: SettingsStore.shared)
                 self.addLog("Config JSON length: \(configJSON.count)", level: .debug)
@@ -104,14 +149,20 @@ class VPNManager: ObservableObject {
         DispatchQueue.main.async { withAnimation(.spring()) { self.connectionState = .disconnecting } }
         addLog("Отключение...", level: .info)
         stopTimers()
-        xrayQueue.async { [weak self] in LibXray.stop(); self?.xrayRunning = false }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            withAnimation(.spring()) {
-                self.connectionState = .disconnected
-                self.vpnIP = nil; self.connectedAt = nil
-                self.bytesUp = 0; self.bytesDown = 0
+        xrayQueue.async { [weak self] in
+            guard let self else { return }
+            // Stop xray synchronously — blocks until core stops
+            LibXray.stop()
+            self.xrayRunning = false
+            self.addLog("Xray остановлен", level: .info)
+            DispatchQueue.main.async {
+                withAnimation(.spring()) {
+                    self.connectionState = .disconnected
+                    self.vpnIP = nil; self.connectedAt = nil
+                    self.bytesUp = 0; self.bytesDown = 0
+                }
+                self.addLog("Отключено", level: .info)
             }
-            self.addLog("Отключено", level: .info)
         }
     }
 
