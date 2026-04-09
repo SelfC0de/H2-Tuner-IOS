@@ -1,11 +1,11 @@
 import Foundation
 import SwiftUI
 
-// LibXray API — confirmed from nm dump:
-// LibXrayRunXrayFromJSON(base64Text) → NSString*
-//   base64Text = base64(JSON{"datDir":"...","mphCachePath":"...","configJSON":"..."})
-// LibXrayStopXray() → NSString*
-// Returns base64(JSON{"isSuccess":bool,"message":"..."})
+// LibXray API confirmed from nm/header dump:
+// LibXrayRunXrayFromJSON(NSString* base64Text) -> NSString*
+// base64Text = base64(JSON{"datDir":"...","mphCachePath":"...","configJSON":"..."})
+// returns base64(JSON{"isSuccess":bool,"message":"..."})
+// LibXrayStopXray() -> NSString*
 
 private enum LibXray {
     static func runFromJSON(configJSON: String) -> String {
@@ -15,27 +15,36 @@ private enum LibXray {
             "mphCachePath": "",
             "configJSON": configJSON
         ]
-        guard let data = try? JSONSerialization.data(withJSONObject: request),
-              let base64 = String(data: data, encoding: .utf8)?.data(using: .utf8)?.base64EncodedString()
-        else { return "error: encode failed" }
+        guard let reqData = try? JSONSerialization.data(withJSONObject: request),
+              let reqStr = String(data: reqData, encoding: .utf8),
+              let base64 = reqStr.data(using: .utf8)?.base64EncodedString()
+        else { return "encode request failed" }
 
         let raw = LibXrayRunXrayFromJSON(base64)
         return decodeResult(raw)
     }
 
-    static func stop() {
-        _ = LibXrayStopXray()
-    }
+    static func stop() { _ = LibXrayStopXray() }
 
-    private static func decodeResult(_ raw: String?) -> String {
-        guard let raw, !raw.isEmpty else { return "" }
-        if let data = Data(base64Encoded: raw),
-           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            let ok = json["isSuccess"] as? Bool ?? false
-            let msg = json["message"] as? String ?? ""
-            return ok ? "" : "error: \(msg)"
+    static func decodeResult(_ raw: String?) -> String {
+        guard let raw = raw else { return "LibXray returned nil" }
+        guard !raw.isEmpty else { return "LibXray returned empty string" }
+
+        // Try base64 decode
+        if let data = Data(base64Encoded: raw) {
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                let ok = json["isSuccess"] as? Bool ?? false
+                let msg = json["message"] as? String ?? "(no message)"
+                if ok { return "" }
+                return "LibXray: \(msg)"
+            }
+            // base64 decoded but not JSON
+            let decoded = String(data: data, encoding: .utf8) ?? "(binary)"
+            return "LibXray non-JSON: \(decoded.prefix(200))"
         }
-        return raw.hasPrefix("error") ? raw : ""
+
+        // Not base64 — return raw (truncated)
+        return "LibXray raw: \(raw.prefix(200))"
     }
 }
 
@@ -66,7 +75,11 @@ class VPNManager: ObservableObject {
             guard let self else { return }
             do {
                 let configJSON = try XrayConfigBuilder.build(server: server, settings: SettingsStore.shared)
+                self.addLog("Config JSON length: \(configJSON.count)", level: .debug)
+
                 let result = LibXray.runFromJSON(configJSON: configJSON)
+                self.addLog("LibXray result: '\(result.isEmpty ? "OK (empty)" : result)'", level: result.isEmpty ? .info : .error)
+
                 if !result.isEmpty {
                     self.handleError(result); return
                 }
@@ -80,7 +93,10 @@ class VPNManager: ObservableObject {
                     self.fetchVPNIP()
                     self.addLog("Подключено", level: .info)
                 }
-            } catch { self.handleError(error.localizedDescription) }
+            } catch {
+                self.addLog("XrayConfigBuilder error: \(error)", level: .error)
+                self.handleError(error.localizedDescription)
+            }
         }
     }
 
@@ -102,9 +118,8 @@ class VPNManager: ObservableObject {
     private func handleError(_ msg: String) {
         DispatchQueue.main.async {
             withAnimation(.spring()) { self.connectionState = .error(msg) }
-            self.addLog("Ошибка: \(msg)", level: .error)
             self.xrayRunning = false
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
                 if case .error = self.connectionState { withAnimation { self.connectionState = .disconnected } }
             }
         }
