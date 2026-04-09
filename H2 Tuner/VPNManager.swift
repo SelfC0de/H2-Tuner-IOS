@@ -216,8 +216,6 @@ class VPNManager: ObservableObject {
             guard let self else { return }
             self.bytesUp += Int64.random(in: 800...8000)
             self.bytesDown += Int64.random(in: 2000...30000)
-            // iOS GC relief — recommended by libXray for iOS memory management
-            _ = LibXrayInitGCPercent(-1)
         }
     }
     private func stopTimers() { statsTimer?.invalidate(); statsTimer = nil }
