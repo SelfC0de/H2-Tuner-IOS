@@ -23,6 +23,7 @@
 		B016 /* ToolkitView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A016 /* ToolkitView.swift */; };
 		B014 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A014 /* Assets.xcassets */; };
 		B015 /* xray in Resources */ = {isa = PBXBuildFile; fileRef = A015 /* xray */; };
+		LR001 /* libresolv.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = LR002 /* libresolv.tbd */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -42,6 +43,7 @@
 		A014 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A015 /* xray */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.executable"; path = xray; sourceTree = "<group>"; };
 		A016 /* ToolkitView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToolkitView.swift; sourceTree = "<group>"; };
+		LR002 /* libresolv.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libresolv.tbd; path = usr/lib/libresolv.tbd; sourceTree = SDKROOT; };
 		A099 /* H2 Tuner.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "H2 Tuner.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
