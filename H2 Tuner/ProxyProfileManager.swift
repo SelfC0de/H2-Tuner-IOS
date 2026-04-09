@@ -5,6 +5,7 @@ struct ProxyProfileManager {
 
     static let profileID = "dev.selfcode.h2tuner.proxy"
     static let socksPort = 10809
+    static let serverPort: UInt16 = 18182
 
     static func generateMobileconfig() -> Data {
         let xml = """
@@ -65,40 +66,89 @@ struct ProxyProfileManager {
         return xml.data(using: .utf8) ?? Data()
     }
 
-    // UIDocumentInteractionController — правильный способ открыть .mobileconfig на iOS
-    static var documentController: UIDocumentInteractionController?
+    // MARK: - Локальный HTTP сервер + открыть в Safari
+
+    private static var serverSocket: CFSocket?
+    private static var serverRunLoopSource: CFRunLoopSource?
 
     static func installProfile(completion: @escaping (Bool) -> Void) {
-        let data = generateMobileconfig()
-        let tmpURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("H2Tuner-proxy.mobileconfig")
-
-        do {
-            try data.write(to: tmpURL, options: .atomic)
-        } catch {
-            completion(false)
-            return
-        }
-
-        DispatchQueue.main.async {
-            guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-                  let window = scene.windows.first,
-                  let rootVC = window.rootViewController else {
+        startLocalServer()
+        // Даём серверу 0.3с стартануть
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            let urlStr = "http://127.0.0.1:\(serverPort)/profile.mobileconfig"
+            if let url = URL(string: urlStr) {
+                UIApplication.shared.open(url, options: [:]) { success in
+                    completion(success)
+                }
+            } else {
                 completion(false)
-                return
             }
+        }
+    }
 
-            let dc = UIDocumentInteractionController(url: tmpURL)
-            dc.uti = "com.apple.mobileconfig"
-            documentController = dc
+    private static func startLocalServer() {
+        stopLocalServer()
 
-            // presentOptionsMenu показывает системный диалог установки профиля
-            let presented = dc.presentOptionsMenu(
-                from: rootVC.view.bounds,
-                in: rootVC.view,
-                animated: true
-            )
-            completion(presented)
+        var context = CFSocketContext(version: 0, info: nil, retain: nil, release: nil, copyDescription: nil)
+        serverSocket = CFSocketCreate(nil, AF_INET, SOCK_STREAM, IPPROTO_TCP,
+            CFSocketCallBackType.acceptCallBack.rawValue,
+            { socket, callbackType, address, data, info in
+                guard callbackType == .acceptCallBack,
+                      let data = data else { return }
+                let nativeHandle = data.load(as: CFSocketNativeHandle.self)
+                ProxyProfileManager.handleConnection(nativeHandle)
+            }, &context)
+
+        guard let sock = serverSocket else { return }
+
+        var yes: Int32 = 1
+        setsockopt(CFSocketGetNative(sock), SOL_SOCKET, SO_REUSEADDR, &yes, socklen_t(MemoryLayout<Int32>.size))
+
+        var addr = sockaddr_in()
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_port = serverPort.bigEndian
+        addr.sin_addr.s_addr = INADDR_ANY
+
+        let addrData = withUnsafeBytes(of: &addr) { Data($0) } as CFData
+        CFSocketSetAddress(sock, addrData)
+
+        serverRunLoopSource = CFSocketCreateRunLoopSource(nil, sock, 0)
+        CFRunLoopAddSource(CFRunLoopGetMain(), serverRunLoopSource, .defaultMode)
+    }
+
+    static func stopLocalServer() {
+        if let src = serverRunLoopSource {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), src, .defaultMode)
+            serverRunLoopSource = nil
+        }
+        if let sock = serverSocket {
+            CFSocketInvalidate(sock)
+            serverSocket = nil
+        }
+    }
+
+    private static func handleConnection(_ handle: CFSocketNativeHandle) {
+        let profileData = generateMobileconfig()
+        let response = """
+HTTP/1.1 200 OK\r
+Content-Type: application/x-apple-aspen-config\r
+Content-Disposition: attachment; filename="H2Tuner-proxy.mobileconfig"\r
+Content-Length: \(profileData.count)\r
+Connection: close\r
+\r
+
+"""
+        var responseData = response.data(using: .utf8)!
+        responseData.append(profileData)
+
+        responseData.withUnsafeBytes { ptr in
+            _ = send(handle, ptr.baseAddress!, responseData.count, 0)
+        }
+        close(handle)
+
+        // Останавливаем сервер после отдачи файла
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            stopLocalServer()
         }
     }
 
